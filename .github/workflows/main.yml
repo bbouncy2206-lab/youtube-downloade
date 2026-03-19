@@ -8,15 +8,6 @@ on:
         required: true
         type: string
         default: 'https://youtube.com/playlist?list=...'
-      method:
-        description: 'Méthode de téléchargement'
-        required: true
-        type: choice
-        options:
-          - 'PO Token + Android (recommandé)'
-          - 'OAuth (compte Google)'
-          - 'Sans auth (vidéos publiques)'
-        default: 'PO Token + Android (recommandé)'
       quality:
         description: 'Qualité vidéo'
         required: true
@@ -34,115 +25,31 @@ jobs:
     timeout-minutes: 360
     
     steps:
-    - name: 📦 Installation des dépendances
+    - name: 📦 Installation de base (sans Docker)
       run: |
         sudo apt-get update
-        sudo apt-get install -y ffmpeg docker.io
+        sudo apt-get install -y ffmpeg
         pip install --upgrade yt-dlp
 
-    - name: 🔑 Méthode 1 - PO Token + Android
-      if: ${{ github.event.inputs.method == 'PO Token + Android (recommandé)' }}
+    - name: 🔑 Installation du plugin PO Token
       run: |
-        echo "🚀 Configuration PO Token..."
-        
-        # Installer le plugin
         pip install -U bgutil-ytdlp-pot-provider
-        
-        # Lancer le serveur en arrière-plan
-        docker run --name bgutil-provider -d -p 4416:4416 --init brainicism/bgutil-ytdlp-pot-provider
-        
-        # Attendre que le serveur soit prêt
-        sleep 5
-        echo "✅ Serveur PO Token démarré sur http://localhost:4416"
 
-    - name: 👤 Méthode 2 - OAuth (compte Google)
-      if: ${{ github.event.inputs.method == 'OAuth (compte Google)' }}
-      run: |
-        echo "⚠️  AUTHENTIFICATION GOOGLE OAUTH"
-        echo "================================="
-        echo ""
-        echo "📝 PREMIÈRE CONNEXION (une seule fois):"
-        echo "1. Exécute cette commande LOCALEMENT sur ton PC :"
-        echo "   yt-dlp --username oauth --password \"\" \"${{ github.event.inputs.playlist_url }}\""
-        echo ""
-        echo "2. Va sur https://www.google.com/device"
-        echo "3. Entre le code affiché"
-        echo "4. Connecte-toi avec ton compte Google"
-        echo ""
-        echo "⚠️  IMPORTANT: Utilise un compte JETABLE !"
-        echo "================================="
-        echo ""
-        echo "🔄 Pour GitHub Actions, configure ces secrets :"
-        echo "   - GOOGLE_USERNAME: ton.email@gmail.com"
-        echo "   - GOOGLE_PASSWORD: ton-mot-de-passe"
-        echo ""
-        if [ -n "${{ secrets.GOOGLE_USERNAME }}" ] && [ -n "${{ secrets.GOOGLE_PASSWORD }}" ]; then
-          echo "✅ Secrets trouvés, utilisation automatique"
-        else
-          echo "⚠️ Secrets non configurés, téléchargement SANS auth"
-        fi
-
-    - name: 🚀 Téléchargement
+    - name: 🚀 Téléchargement avec PO Token
       run: |
         echo "🎬 Début du téléchargement..."
-        
-        # Base de la commande
-        CMD="yt-dlp --verbose"
         
         # Extraire la qualité sans le texte
         QUALITY="${{ github.event.inputs.quality }}"
         QUALITY=${QUALITY%% *}
         
-        # Configuration selon la méthode
-        case "${{ github.event.inputs.method }}" in
-          "PO Token + Android (recommandé)")
-            echo "🔧 Utilisation PO Token + Android"
-            CMD="$CMD --extractor-args \"youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416\""
-            CMD="$CMD --extractor-args \"youtube:player_client=android\""
-            ;;
-          
-          "OAuth (compte Google)")
-            if [ -n "${{ secrets.GOOGLE_USERNAME }}" ] && [ -n "${{ secrets.GOOGLE_PASSWORD }}" ]; then
-              echo "🔧 Utilisation OAuth avec identifiants"
-              CMD="$CMD --username \"${{ secrets.GOOGLE_USERNAME }}\" --password \"${{ secrets.GOOGLE_PASSWORD }}\""
-            else
-              echo "🔧 Utilisation OAuth sans identifiants (première connexion)"
-              CMD="$CMD --username oauth --password \"\""
-            fi
-            CMD="$CMD --extractor-args \"youtube:player_client=web\""
-            ;;
-          
-          "Sans auth (vidéos publiques)")
-            echo "🔧 Téléchargement public"
-            CMD="$CMD --extractor-args \"youtube:player_client=android\""
-            ;;
-        esac
-        
-        # Options communes
-        CMD="$CMD -f \"$QUALITY\""
-        CMD="$CMD -o \"%(playlist_index)s - %(title)s.%(ext)s\""
-        CMD="$CMD \"${{ github.event.inputs.playlist_url }}\""
-        
-        # Afficher la commande
-        echo "📋 Commande: $CMD"
-        echo "-------------------"
-        
-        # Exécuter
-        eval $CMD || {
-          EXIT_CODE=$?
-          echo "❌ Échec du téléchargement (code: $EXIT_CODE)"
-          
-          if [[ "${{ github.event.inputs.method }}" == "OAuth (compte Google)" ]]; then
-            echo ""
-            echo "🆘 AIDE POUR OAUTH:"
-            echo "1. Exécute LOCALEMENT: yt-dlp --username oauth --password \"\" \"${{ github.event.inputs.playlist_url }}\""
-            echo "2. Va sur https://www.google.com/device"
-            echo "3. Entre le code et connecte-toi"
-            echo "4. Ajoute les secrets GOOGLE_USERNAME et GOOGLE_PASSWORD"
-          fi
-          
-          exit $EXIT_CODE
-        }
+        # Commande avec PO Token (sans Docker)
+        yt-dlp \
+          --extractor-args "youtube:player_client=android" \
+          -f "$QUALITY" \
+          -o "%(playlist_index)s - %(title)s.%(ext)s" \
+          "${{ github.event.inputs.playlist_url }}" \
+          --verbose
 
     - name: 📋 Liste des fichiers
       run: |
@@ -158,7 +65,6 @@ jobs:
         if [ -n "$(ls -A $FOLDER 2>/dev/null)" ]; then
           zip -r "videos.zip" "$FOLDER"
           echo "✅ ZIP créé: videos.zip ($(du -h videos.zip | cut -f1))"
-          ls -lh videos.zip
         else
           echo "⚠️ Aucune vidéo à zipper"
         fi
@@ -170,10 +76,3 @@ jobs:
         path: |
           *.zip
         retention-days: 7
-
-    - name: 🧹 Nettoyage
-      if: always()
-      run: |
-        docker stop bgutil-provider 2>/dev/null || true
-        docker rm bgutil-provider 2>/dev/null || true
-        echo "🧹 Nettoyage terminé"
