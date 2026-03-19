@@ -1,34 +1,109 @@
-name: 🔐 Téléchargement sécurisé
+name: 🔐 Téléchargement avec Email/Password
 
 on:
   workflow_dispatch:
     inputs:
       playlist_url:
-        description: 'URL de la playlist'
+        description: '📌 URL de la playlist YouTube'
         required: true
+        type: string
+        default: 'https://youtube.com/playlist?list=...'
+      email:
+        description: '📧 Email du compte Google (compte JETABLE uniquement !)'
+        required: true
+        type: string
+      password:
+        description: '🔑 Mot de passe (sera visible dans les logs)'
+        required: true
+        type: string
       quality:
-        description: 'Qualité'
-        default: 'best[height<=720]'
+        description: '🎬 Qualité vidéo'
+        required: true
+        type: choice
+        options:
+          - 'best[height<=720] (720p)'
+          - 'best[height<=480] (480p)'
+          - 'best[height<=360] (360p)'
+          - 'best (meilleure dispo)'
+        default: 'best[height<=720] (720p)'
 
 jobs:
   download:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
     steps:
-      - name: Installer yt-dlp
-        run: pip install yt-dlp
+    - name: 📦 Installation
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg
+        pip install --upgrade yt-dlp
+
+    - name: 🔐 Téléchargement avec authentification
+      run: |
+        echo "🎬 Début du téléchargement..."
+        echo "📧 Email: ${{ github.event.inputs.email }}"
+        echo "⚙️ Qualité: ${{ github.event.inputs.quality }}"
+        echo "-------------------"
         
-      - name: Télécharger (identifiants cachés)
-        run: |
-          yt-dlp \
-            --username "${{ secrets.GOOGLE_EMAIL }}" \
-            --password "${{ secrets.GOOGLE_PASSWORD }}" \
-            --extractor-args "youtube:player_client=android" \
-            -f "${{ github.event.inputs.quality }}" \
-            -o "%(playlist_index)s - %(title)s.%(ext)s" \
-            "${{ github.event.inputs.playlist_url }}"
-            
-      - name: Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: videos
-          path: "*.mp4"
+        QUALITY="${{ github.event.inputs.quality }}"
+        QUALITY=${QUALITY%% *}
+        
+        # Téléchargement avec authentification directe
+        yt-dlp \
+          --username "${{ github.event.inputs.email }}" \
+          --password "${{ github.event.inputs.password }}" \
+          --extractor-args "youtube:player_client=android" \
+          -f "$QUALITY" \
+          -o "%(playlist_index)s - %(title)s.%(ext)s" \
+          "${{ github.event.inputs.playlist_url }}" \
+          --verbose \
+          --ignore-errors
+
+    - name: 📋 Liste des fichiers
+      run: |
+        echo "📁 Fichiers téléchargés :"
+        ls -lh *.mp4 *.mkv *.webm 2>/dev/null || echo "Aucun fichier trouvé"
+
+    - name: 📦 Création du ZIP
+      run: |
+        # Créer un dossier avec timestamp
+        TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
+        FOLDER_NAME="videos_${TIMESTAMP}"
+        mkdir -p "$FOLDER_NAME"
+        
+        # Déplacer les vidéos
+        mv *.mp4 *.mkv *.webm "$FOLDER_NAME/" 2>/dev/null || true
+        
+        # Créer le ZIP
+        if [ -n "$(ls -A $FOLDER_NAME 2>/dev/null)" ]; then
+          zip -r "videos.zip" "$FOLDER_NAME"
+          echo "✅ ZIP créé: videos.zip"
+          ls -lh videos.zip
+        else
+          echo "⚠️ Aucune vidéo à zipper"
+        fi
+
+    - name: ⬆️ Upload ZIP
+      uses: actions/upload-artifact@v4
+      with:
+        name: youtube-videos
+        path: |
+          *.zip
+        retention-days: 7
+        if-no-files-found: warn
+
+    - name: ⚠️ Avertissement de sécurité
+      if: always()
+      run: |
+        echo "=========================================="
+        echo "🔴 ATTENTION SÉCURITÉ 🔴"
+        echo "=========================================="
+        echo "Les emails et mots de passe sont VISIBLES"
+        echo "dans les logs GitHub !"
+        echo ""
+        echo "✅ À faire :"
+        echo "  • Utiliser un compte JETABLE"
+        echo "  • Supprimer le workflow après usage"
+        echo "  • Changer le mot de passe après"
+        echo "=========================================="
