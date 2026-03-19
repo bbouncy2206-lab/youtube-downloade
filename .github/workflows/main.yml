@@ -1,0 +1,62 @@
+name: Télécharger une playlist YouTube
+
+on:
+  workflow_dispatch:
+    inputs:
+      playlist_url:
+        description: 'URL de la playlist YouTube'
+        required: true
+        type: string
+        default: 'https://youtube.com/playlist?list=PLsVYsZZy4UwXrRvTZVb0lZ5BJ3QZSJagt'
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
+    steps:
+    - name: Setup yt-dlp
+      uses: AnimMouse/setup-yt-dlp@v5
+      with:
+        ffmpeg: true
+
+    - name: Installer Firefox (pour les cookies)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y firefox-esr
+
+    - name: Télécharger avec TA commande exacte
+      run: |
+        echo "🚀 Téléchargement avec ta commande..."
+        echo "📋 Commande: yt-dlp --cookies-from-browser firefox --extractor-args \"youtube:player_client=android\" -f \"best[height<=720]\" -o \"%(playlist_index)s - %(title)s.%(ext)s\" \"${{ github.event.inputs.playlist_url }}\""
+        echo "-------------------"
+        
+        # TA COMMANDE EXACTE (copiée-collée)
+        yt-dlp \
+          --cookies-from-browser firefox \
+          --extractor-args "youtube:player_client=android" \
+          -f "best[height<=720]" \
+          -o "%(playlist_index)s - %(title)s.%(ext)s" \
+          "${{ github.event.inputs.playlist_url }}"
+
+    - name: Créer l'archive ZIP
+      run: |
+        # Créer un dossier avec le nom de la playlist
+        PLAYLIST_NAME="playlist_$(date +'%Y%m%d_%H%M%S')"
+        mkdir -p "$PLAYLIST_NAME"
+        
+        # Déplacer toutes les vidéos dans le dossier
+        mv *.mp4 *.mkv *.webm "$PLAYLIST_NAME/" 2>/dev/null || true
+        
+        # Créer le ZIP
+        zip -r "videos.zip" "$PLAYLIST_NAME"
+        
+        echo "✅ Archive créée: videos.zip"
+
+    - name: Upload ZIP
+      uses: actions/upload-artifact@v4
+      with:
+        name: videos-telecharges
+        path: |
+          *.zip
+        retention-days: 7
