@@ -7,7 +7,7 @@ on:
         description: 'URL de la playlist YouTube'
         required: true
         type: string
-        default: 'https://youtube.com/playlist?list=PLsVYsZZy4UwXrRvTZVb0lZ5BJ3QZSJagt'
+        default: 'https://youtube.com/playlist?list=...'
 
 jobs:
   download:
@@ -15,33 +15,47 @@ jobs:
     timeout-minutes: 360
     
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
     - name: Installer yt-dlp et FFmpeg
       run: |
         sudo apt-get update
         sudo apt-get install -y ffmpeg
         pip install --upgrade yt-dlp
 
-    - name: Vérifier les installations
+    - name: Créer le fichier cookies.txt depuis les secrets
       run: |
-        yt-dlp --version
-        ffmpeg -version | head -n1
+        if [ -n "${{ secrets.YT_COOKIES }}" ]; then
+          echo "${{ secrets.YT_COOKIES }}" | base64 -d > cookies.txt
+          echo "✅ Cookies chargés avec succès"
+          ls -la cookies.txt
+        else
+          echo "⚠️ Pas de cookies - téléchargement sans authentification"
+        fi
 
-    - name: Télécharger avec TA commande exacte
+    - name: Télécharger avec cookies (si disponibles)
       run: |
-        echo "🚀 Téléchargement avec ta commande..."
-        echo "📋 Commande: yt-dlp --cookies-from-browser firefox --extractor-args \"youtube:player_client=android\" -f \"best[height<=720]\" -o \"%(playlist_index)s - %(title)s.%(ext)s\" \"${{ github.event.inputs.playlist_url }}\""
-        echo "-------------------"
+        echo "🚀 Téléchargement de la playlist..."
         
-        # TA COMMANDE EXACTE (copiée-collée)
-        yt-dlp \
-          --cookies-from-browser firefox \
-          --extractor-args "youtube:player_client=android" \
-          -f "best[height<=720]" \
-          -o "%(playlist_index)s - %(title)s.%(ext)s" \
-          "${{ github.event.inputs.playlist_url }}"
+        # Construire la commande
+        CMD="yt-dlp"
+        
+        # Ajouter les cookies si disponibles
+        if [ -f "cookies.txt" ]; then
+          CMD="$CMD --cookies cookies.txt"
+        else
+          CMD="$CMD --cookies-from-browser firefox"  # Fallback (ne marchera pas sur GitHub)
+        fi
+        
+        # Ajouter les arguments
+        CMD="$CMD --extractor-args \"youtube:player_client=android\""
+        CMD="$CMD -f \"best[height<=720]\""
+        CMD="$CMD -o \"%(playlist_index)s - %(title)s.%(ext)s\""
+        CMD="$CMD \"${{ github.event.inputs.playlist_url }}\""
+        
+        # Afficher la commande (sans les cookies)
+        echo "📋 Commande: yt-dlp [cookies] --extractor-args..."
+        
+        # Exécuter
+        eval $CMD
 
     - name: Lister les fichiers téléchargés
       run: |
@@ -50,15 +64,16 @@ jobs:
 
     - name: Créer l'archive ZIP
       run: |
-        # Créer un dossier temporaire
-        mkdir -p videos
+        # Créer un dossier avec le nom de la playlist
+        PLAYLIST_NAME="videos_$(date +'%Y%m%d_%H%M%S')"
+        mkdir -p "$PLAYLIST_NAME"
         
-        # Déplacer toutes les vidéos dans le dossier
-        mv *.mp4 *.mkv *.webm videos/ 2>/dev/null || true
+        # Déplacer toutes les vidéos
+        mv *.mp4 *.mkv *.webm "$PLAYLIST_NAME/" 2>/dev/null || true
         
         # Créer le ZIP si des fichiers existent
-        if [ -n "$(ls -A videos 2>/dev/null)" ]; then
-          zip -r "videos.zip" videos/
+        if [ -n "$(ls -A $PLAYLIST_NAME 2>/dev/null)" ]; then
+          zip -r "videos.zip" "$PLAYLIST_NAME"
           echo "✅ Archive créée: videos.zip"
           ls -lh videos.zip
         else
@@ -69,7 +84,6 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: videos-telecharges
-        path: |
-          videos.zip
+        path: videos.zip
         if-no-files-found: warn
         retention-days: 7
