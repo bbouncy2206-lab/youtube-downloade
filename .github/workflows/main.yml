@@ -1,4 +1,4 @@
-name: Télécharger une playlist YouTube
+name: 🎥 Téléchargeur YouTube
 
 on:
   workflow_dispatch:
@@ -8,6 +8,25 @@ on:
         required: true
         type: string
         default: 'https://youtube.com/playlist?list=...'
+      method:
+        description: 'Méthode de téléchargement'
+        required: true
+        type: choice
+        options:
+          - 'PO Token + Android (recommandé)'
+          - 'OAuth (compte Google)'
+          - 'Sans auth (vidéos publiques)'
+        default: 'PO Token + Android (recommandé)'
+      quality:
+        description: 'Qualité vidéo'
+        required: true
+        type: choice
+        options:
+          - 'best[height<=720] (720p)'
+          - 'best[height<=480] (480p)'
+          - 'best[height<=360] (360p)'
+          - 'best (meilleure dispo)'
+        default: 'best[height<=720] (720p)'
 
 jobs:
   download:
@@ -15,75 +34,146 @@ jobs:
     timeout-minutes: 360
     
     steps:
-    - name: Installer yt-dlp et FFmpeg
+    - name: 📦 Installation des dépendances
       run: |
         sudo apt-get update
-        sudo apt-get install -y ffmpeg
+        sudo apt-get install -y ffmpeg docker.io
         pip install --upgrade yt-dlp
 
-    - name: Créer le fichier cookies.txt depuis les secrets
+    - name: 🔑 Méthode 1 - PO Token + Android
+      if: ${{ github.event.inputs.method == 'PO Token + Android (recommandé)' }}
       run: |
-        if [ -n "${{ secrets.YT_COOKIES }}" ]; then
-          echo "${{ secrets.YT_COOKIES }}" | base64 -d > cookies.txt
-          echo "✅ Cookies chargés avec succès"
-          ls -la cookies.txt
+        echo "🚀 Configuration PO Token..."
+        
+        # Installer le plugin
+        pip install -U bgutil-ytdlp-pot-provider
+        
+        # Lancer le serveur en arrière-plan
+        docker run --name bgutil-provider -d -p 4416:4416 --init brainicism/bgutil-ytdlp-pot-provider
+        
+        # Attendre que le serveur soit prêt
+        sleep 5
+        echo "✅ Serveur PO Token démarré sur http://localhost:4416"
+
+    - name: 👤 Méthode 2 - OAuth (compte Google)
+      if: ${{ github.event.inputs.method == 'OAuth (compte Google)' }}
+      run: |
+        echo "⚠️  AUTHENTIFICATION GOOGLE OAUTH"
+        echo "================================="
+        echo ""
+        echo "📝 PREMIÈRE CONNEXION (une seule fois):"
+        echo "1. Exécute cette commande LOCALEMENT sur ton PC :"
+        echo "   yt-dlp --username oauth --password \"\" \"${{ github.event.inputs.playlist_url }}\""
+        echo ""
+        echo "2. Va sur https://www.google.com/device"
+        echo "3. Entre le code affiché"
+        echo "4. Connecte-toi avec ton compte Google"
+        echo ""
+        echo "⚠️  IMPORTANT: Utilise un compte JETABLE !"
+        echo "================================="
+        echo ""
+        echo "🔄 Pour GitHub Actions, configure ces secrets :"
+        echo "   - GOOGLE_USERNAME: ton.email@gmail.com"
+        echo "   - GOOGLE_PASSWORD: ton-mot-de-passe"
+        echo ""
+        if [ -n "${{ secrets.GOOGLE_USERNAME }}" ] && [ -n "${{ secrets.GOOGLE_PASSWORD }}" ]; then
+          echo "✅ Secrets trouvés, utilisation automatique"
         else
-          echo "⚠️ Pas de cookies - téléchargement sans authentification"
+          echo "⚠️ Secrets non configurés, téléchargement SANS auth"
         fi
 
-    - name: Télécharger avec cookies (si disponibles)
+    - name: 🚀 Téléchargement
       run: |
-        echo "🚀 Téléchargement de la playlist..."
+        echo "🎬 Début du téléchargement..."
         
-        # Construire la commande
-        CMD="yt-dlp"
+        # Base de la commande
+        CMD="yt-dlp --verbose"
         
-        # Ajouter les cookies si disponibles
-        if [ -f "cookies.txt" ]; then
-          CMD="$CMD --cookies cookies.txt"
-        else
-          CMD="$CMD --cookies-from-browser firefox"  # Fallback (ne marchera pas sur GitHub)
-        fi
+        # Extraire la qualité sans le texte
+        QUALITY="${{ github.event.inputs.quality }}"
+        QUALITY=${QUALITY%% *}
         
-        # Ajouter les arguments
-        CMD="$CMD --extractor-args \"youtube:player_client=android\""
-        CMD="$CMD -f \"best[height<=720]\""
+        # Configuration selon la méthode
+        case "${{ github.event.inputs.method }}" in
+          "PO Token + Android (recommandé)")
+            echo "🔧 Utilisation PO Token + Android"
+            CMD="$CMD --extractor-args \"youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416\""
+            CMD="$CMD --extractor-args \"youtube:player_client=android\""
+            ;;
+          
+          "OAuth (compte Google)")
+            if [ -n "${{ secrets.GOOGLE_USERNAME }}" ] && [ -n "${{ secrets.GOOGLE_PASSWORD }}" ]; then
+              echo "🔧 Utilisation OAuth avec identifiants"
+              CMD="$CMD --username \"${{ secrets.GOOGLE_USERNAME }}\" --password \"${{ secrets.GOOGLE_PASSWORD }}\""
+            else
+              echo "🔧 Utilisation OAuth sans identifiants (première connexion)"
+              CMD="$CMD --username oauth --password \"\""
+            fi
+            CMD="$CMD --extractor-args \"youtube:player_client=web\""
+            ;;
+          
+          "Sans auth (vidéos publiques)")
+            echo "🔧 Téléchargement public"
+            CMD="$CMD --extractor-args \"youtube:player_client=android\""
+            ;;
+        esac
+        
+        # Options communes
+        CMD="$CMD -f \"$QUALITY\""
         CMD="$CMD -o \"%(playlist_index)s - %(title)s.%(ext)s\""
         CMD="$CMD \"${{ github.event.inputs.playlist_url }}\""
         
-        # Afficher la commande (sans les cookies)
-        echo "📋 Commande: yt-dlp [cookies] --extractor-args..."
+        # Afficher la commande
+        echo "📋 Commande: $CMD"
+        echo "-------------------"
         
         # Exécuter
-        eval $CMD
+        eval $CMD || {
+          EXIT_CODE=$?
+          echo "❌ Échec du téléchargement (code: $EXIT_CODE)"
+          
+          if [[ "${{ github.event.inputs.method }}" == "OAuth (compte Google)" ]]; then
+            echo ""
+            echo "🆘 AIDE POUR OAUTH:"
+            echo "1. Exécute LOCALEMENT: yt-dlp --username oauth --password \"\" \"${{ github.event.inputs.playlist_url }}\""
+            echo "2. Va sur https://www.google.com/device"
+            echo "3. Entre le code et connecte-toi"
+            echo "4. Ajoute les secrets GOOGLE_USERNAME et GOOGLE_PASSWORD"
+          fi
+          
+          exit $EXIT_CODE
+        }
 
-    - name: Lister les fichiers téléchargés
+    - name: 📋 Liste des fichiers
       run: |
-        echo "📋 Fichiers téléchargés :"
-        ls -lh *.mp4 *.mkv *.webm 2>/dev/null || echo "Aucun fichier vidéo trouvé"
+        echo "📁 Fichiers téléchargés :"
+        ls -lh *.mp4 *.mkv *.webm 2>/dev/null || echo "Aucun fichier"
 
-    - name: Créer l'archive ZIP
+    - name: 📦 Création du ZIP
       run: |
-        # Créer un dossier avec le nom de la playlist
-        PLAYLIST_NAME="videos_$(date +'%Y%m%d_%H%M%S')"
-        mkdir -p "$PLAYLIST_NAME"
+        FOLDER="videos_$(date +'%Y%m%d_%H%M%S')"
+        mkdir -p "$FOLDER"
+        mv *.mp4 *.mkv *.webm "$FOLDER/" 2>/dev/null || true
         
-        # Déplacer toutes les vidéos
-        mv *.mp4 *.mkv *.webm "$PLAYLIST_NAME/" 2>/dev/null || true
-        
-        # Créer le ZIP si des fichiers existent
-        if [ -n "$(ls -A $PLAYLIST_NAME 2>/dev/null)" ]; then
-          zip -r "videos.zip" "$PLAYLIST_NAME"
-          echo "✅ Archive créée: videos.zip"
+        if [ -n "$(ls -A $FOLDER 2>/dev/null)" ]; then
+          zip -r "videos.zip" "$FOLDER"
+          echo "✅ ZIP créé: videos.zip ($(du -h videos.zip | cut -f1))"
           ls -lh videos.zip
         else
           echo "⚠️ Aucune vidéo à zipper"
         fi
 
-    - name: Upload ZIP
+    - name: ⬆️ Upload ZIP
       uses: actions/upload-artifact@v4
       with:
-        name: videos-telecharges
-        path: videos.zip
-        if-no-files-found: warn
+        name: youtube-videos
+        path: |
+          *.zip
         retention-days: 7
+
+    - name: 🧹 Nettoyage
+      if: always()
+      run: |
+        docker stop bgutil-provider 2>/dev/null || true
+        docker rm bgutil-provider 2>/dev/null || true
+        echo "🧹 Nettoyage terminé"
