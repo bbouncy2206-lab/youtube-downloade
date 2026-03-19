@@ -1,78 +1,34 @@
-name: 🎥 Téléchargeur YouTube
+name: 🔐 Téléchargement sécurisé
 
 on:
   workflow_dispatch:
     inputs:
       playlist_url:
-        description: 'URL de la playlist YouTube'
+        description: 'URL de la playlist'
         required: true
-        type: string
-        default: 'https://youtube.com/playlist?list=...'
       quality:
-        description: 'Qualité vidéo'
-        required: true
-        type: choice
-        options:
-          - 'best[height<=720] (720p)'
-          - 'best[height<=480] (480p)'
-          - 'best[height<=360] (360p)'
-          - 'best (meilleure dispo)'
-        default: 'best[height<=720] (720p)'
+        description: 'Qualité'
+        default: 'best[height<=720]'
 
 jobs:
   download:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
-    
     steps:
-    - name: 📦 Installation de base (sans Docker)
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y ffmpeg
-        pip install --upgrade yt-dlp
-
-    - name: 🔑 Installation du plugin PO Token
-      run: |
-        pip install -U bgutil-ytdlp-pot-provider
-
-    - name: 🚀 Téléchargement avec PO Token
-      run: |
-        echo "🎬 Début du téléchargement..."
+      - name: Installer yt-dlp
+        run: pip install yt-dlp
         
-        # Extraire la qualité sans le texte
-        QUALITY="${{ github.event.inputs.quality }}"
-        QUALITY=${QUALITY%% *}
-        
-        # Commande avec PO Token (sans Docker)
-        yt-dlp \
-          --extractor-args "youtube:player_client=android" \
-          -f "$QUALITY" \
-          -o "%(playlist_index)s - %(title)s.%(ext)s" \
-          "${{ github.event.inputs.playlist_url }}" \
-          --verbose
-
-    - name: 📋 Liste des fichiers
-      run: |
-        echo "📁 Fichiers téléchargés :"
-        ls -lh *.mp4 *.mkv *.webm 2>/dev/null || echo "Aucun fichier"
-
-    - name: 📦 Création du ZIP
-      run: |
-        FOLDER="videos_$(date +'%Y%m%d_%H%M%S')"
-        mkdir -p "$FOLDER"
-        mv *.mp4 *.mkv *.webm "$FOLDER/" 2>/dev/null || true
-        
-        if [ -n "$(ls -A $FOLDER 2>/dev/null)" ]; then
-          zip -r "videos.zip" "$FOLDER"
-          echo "✅ ZIP créé: videos.zip ($(du -h videos.zip | cut -f1))"
-        else
-          echo "⚠️ Aucune vidéo à zipper"
-        fi
-
-    - name: ⬆️ Upload ZIP
-      uses: actions/upload-artifact@v4
-      with:
-        name: youtube-videos
-        path: |
-          *.zip
-        retention-days: 7
+      - name: Télécharger (identifiants cachés)
+        run: |
+          yt-dlp \
+            --username "${{ secrets.GOOGLE_EMAIL }}" \
+            --password "${{ secrets.GOOGLE_PASSWORD }}" \
+            --extractor-args "youtube:player_client=android" \
+            -f "${{ github.event.inputs.quality }}" \
+            -o "%(playlist_index)s - %(title)s.%(ext)s" \
+            "${{ github.event.inputs.playlist_url }}"
+            
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: videos
+          path: "*.mp4"
