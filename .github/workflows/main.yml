@@ -15,15 +15,19 @@ jobs:
     timeout-minutes: 360
     
     steps:
-    - name: Setup yt-dlp
-      uses: AnimMouse/setup-yt-dlp@v5
-      with:
-        ffmpeg: true
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-    - name: Installer Firefox (pour les cookies)
+    - name: Installer yt-dlp et FFmpeg
       run: |
         sudo apt-get update
-        sudo apt-get install -y firefox-esr
+        sudo apt-get install -y ffmpeg
+        pip install --upgrade yt-dlp
+
+    - name: Vérifier les installations
+      run: |
+        yt-dlp --version
+        ffmpeg -version | head -n1
 
     - name: Télécharger avec TA commande exacte
       run: |
@@ -39,24 +43,33 @@ jobs:
           -o "%(playlist_index)s - %(title)s.%(ext)s" \
           "${{ github.event.inputs.playlist_url }}"
 
+    - name: Lister les fichiers téléchargés
+      run: |
+        echo "📋 Fichiers téléchargés :"
+        ls -lh *.mp4 *.mkv *.webm 2>/dev/null || echo "Aucun fichier vidéo trouvé"
+
     - name: Créer l'archive ZIP
       run: |
-        # Créer un dossier avec le nom de la playlist
-        PLAYLIST_NAME="playlist_$(date +'%Y%m%d_%H%M%S')"
-        mkdir -p "$PLAYLIST_NAME"
+        # Créer un dossier temporaire
+        mkdir -p videos
         
         # Déplacer toutes les vidéos dans le dossier
-        mv *.mp4 *.mkv *.webm "$PLAYLIST_NAME/" 2>/dev/null || true
+        mv *.mp4 *.mkv *.webm videos/ 2>/dev/null || true
         
-        # Créer le ZIP
-        zip -r "videos.zip" "$PLAYLIST_NAME"
-        
-        echo "✅ Archive créée: videos.zip"
+        # Créer le ZIP si des fichiers existent
+        if [ -n "$(ls -A videos 2>/dev/null)" ]; then
+          zip -r "videos.zip" videos/
+          echo "✅ Archive créée: videos.zip"
+          ls -lh videos.zip
+        else
+          echo "⚠️ Aucune vidéo à zipper"
+        fi
 
     - name: Upload ZIP
       uses: actions/upload-artifact@v4
       with:
         name: videos-telecharges
         path: |
-          *.zip
+          videos.zip
+        if-no-files-found: warn
         retention-days: 7
